@@ -12,6 +12,7 @@
 ✅ **SSH 安全**：主机密钥验证，防止中间人攻击  
 ✅ **进度可视**：实时显示同步进度和状态  
 ✅ **自动排除**：智能过滤 .git、node_modules 等无关文件
+✅ **代码扫描**：自动识别项目类型（Python/Node/Go），仅同步代码
 
 ## 安装
 
@@ -87,6 +88,12 @@ envsync diff local prod
 # 安全同步（自动备份 + 校验）
 envsync sync local dev
 
+# 仅同步代码（自动排除 node_modules/.venv 等）
+envsync sync local dev --code-only
+
+# 指定同步特定组件
+envsync sync local dev --code-only --component python
+
 # 强制同步（覆盖目标）
 envsync sync local dev --strategy force
 
@@ -142,11 +149,17 @@ envsync deps install prod --cache
   - `--backup/--no-backup` - 同步前自动备份（默认开启）
   - `--verify/--no-verify` - 同步后校验一致性（默认开启）
   - `--auto-commit` - 同步后自动 Git 提交
+  - `--code-only` - 仅同步代码（自动扫描排除依赖/构建产物）
+  - `--component <type>` - 指定同步的组件类型（python/node/go等）
 
 ### 回滚与检查点
 - `envsync rollback <env> [--checkpoint <timestamp>]` - 回滚到检查点
 - `envsync checkpoints <env>` - 列出环境的所有检查点
 - `envsync cleanup <env> [--keep N]` - 清理旧检查点
+
+### 项目扫描
+- `envsync scan <env> [--force]` - 扫描项目结构（识别代码/非代码）
+- `envsync compare-structure <env1> <env2>` - 比较两个环境的项目结构差异
 
 ### 依赖管理
 - `envsync deps download <env>` - 下载依赖到本地缓存

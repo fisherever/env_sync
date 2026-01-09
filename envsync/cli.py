@@ -6,6 +6,7 @@ from envsync.core.config import ConfigService, DEFAULT_CONFIG_PATH
 from envsync.core.diff import DiffService
 from envsync.core.sync import SyncService
 from envsync.core.safe_sync import SafeSyncService
+from envsync.core.scanner import ProjectScanner
 from envsync.core.deps import DependencyService
 from envsync.core.deploy import DeployService
 from envsync.core.init import InitService
@@ -145,7 +146,9 @@ def init_all(base, branch):
 @click.option("--backup/--no-backup", default=True, help="同步前备份目标环境")
 @click.option("--verify/--no-verify", default=True, help="同步后校验一致性")
 @click.option("--auto-commit", is_flag=True, help="同步后自动 Git 提交")
-def sync(source, target, strategy, backup, verify, auto_commit):
+@click.option("--code-only", is_flag=True, help="仅同步代码（自动排除依赖/构建产物）")
+@click.option("--component", "components", multiple=True, help="指定同步的组件类型（python/node/go等）")
+def sync(source, target, strategy, backup, verify, auto_commit, code_only, components):
     """同步代码（支持备份、校验、自动提交）"""
     if strategy == "force":
         click.confirm(
@@ -159,8 +162,12 @@ def sync(source, target, strategy, backup, verify, auto_commit):
         backup=backup,
         verify=verify,
         auto_commit=auto_commit,
+        code_only=code_only,
+        components=list(components) if components else None,
     )
     click.echo(result.summary())
+    if result.code_only and result.components_synced:
+        click.echo(f"  同步组件: {', '.join(result.components_synced)}")
     if not result.success:
         sys.exit(1)
 
@@ -249,6 +256,38 @@ def cleanup_checkpoints(env, keep):
     service = SafeSyncService(ConfigService().load())
     service.cleanup_checkpoints(env, keep=keep)
     click.echo(f"已清理 {env} 的旧检查点，保留最近 {keep} 个")
+
+
+@cli.command()
+@click.argument("env")
+@click.option("--force", is_flag=True, help="强制重新扫描（忽略缓存）")
+def scan(env, force):
+    """扫描环境的项目结构（识别代码/非代码）"""
+    scanner = ProjectScanner(ConfigService().load())
+    structure = scanner.scan(env, force=force)
+    click.echo(structure.summary())
+
+
+@cli.command("compare-structure")
+@click.argument("env1")
+@click.argument("env2")
+def compare_structure(env1, env2):
+    """比较两个环境的项目结构差异"""
+    scanner = ProjectScanner(ConfigService().load())
+    result = scanner.compare_structures(env1, env2)
+    
+    click.echo(f"结构比较: {env1} vs {env2}")
+    click.echo(f"  类型匹配: {'✓' if result['types_match'] else '✗'}")
+    if result['types_in_1_only']:
+        click.echo(f"  仅在 {env1}: {result['types_in_1_only']}")
+    if result['types_in_2_only']:
+        click.echo(f"  仅在 {env2}: {result['types_in_2_only']}")
+    click.echo(f"  代码目录匹配: {'✓' if result['code_dirs_match'] else '✗'}")
+    if result['code_only_in_1']:
+        click.echo(f"  仅在 {env1} 的目录: {len(result['code_only_in_1'])} 个")
+    if result['code_only_in_2']:
+        click.echo(f"  仅在 {env2} 的目录: {len(result['code_only_in_2'])} 个")
+    click.echo(f"  结构兼容: {'✓ 可安全同步' if result['structure_compatible'] else '⚠ 需注意差异'}")
 
 
 def main():

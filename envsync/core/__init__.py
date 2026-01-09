@@ -5,6 +5,7 @@ from envsync.core.config import ConfigService, ConfigData, EnvEntry, GitLabConfi
 from envsync.core.diff import DiffService, DiffReport
 from envsync.core.sync import SyncService
 from envsync.core.safe_sync import SafeSyncService, SyncCheckpoint, SyncResult
+from envsync.core.scanner import ProjectScanner, ProjectStructure, ProjectComponent
 from envsync.core.deps import DependencyService
 from envsync.core.deploy import DeployService
 from envsync.core.init import InitService
@@ -22,6 +23,9 @@ __all__ = [
     "SafeSyncService",
     "SyncCheckpoint",
     "SyncResult",
+    "ProjectScanner",
+    "ProjectStructure",
+    "ProjectComponent",
     "DependencyService",
     "DeployService",
     "InitService",

@@ -16,6 +16,11 @@ from envsync.utils.envs import EnvContext
 from envsync.utils.git import GitRepo
 from envsync.utils.logger import get_logger
 
+# 延迟导入避免循环依赖
+def _get_scanner():
+    from envsync.core.scanner import ProjectScanner
+    return ProjectScanner
+
 log = get_logger(__name__)
 
 
@@ -48,6 +53,8 @@ class SyncResult:
     files_synced: int = 0
     files_deleted: int = 0
     verified: bool = False
+    code_only: bool = False
+    components_synced: List[str] = field(default_factory=list)
     error: Optional[str] = None
 
     def summary(self) -> str:
@@ -89,6 +96,8 @@ class SafeSyncService:
         backup: bool = True,
         verify: bool = True,
         auto_commit: bool = False,
+        code_only: bool = False,
+        components: Optional[List[str]] = None,
     ) -> SyncResult:
         """
         执行高可靠同步
@@ -98,6 +107,8 @@ class SafeSyncService:
             target: 目标环境名
             strategy: safe=检查未提交变更, force=强制覆盖
             backup: 是否在同步前备份目标
+            code_only: 仅同步代码（自动扫描排除依赖/构建产物）
+            components: 指定同步的组件类型（python, node 等）
             verify: 是否在同步后校验一致性
             auto_commit: 同步后是否自动 Git 提交
         """
@@ -106,8 +117,24 @@ class SafeSyncService:
         log.info("开始安全同步: %s → %s", ctx_src.display, ctx_dst.display)
 
         checkpoint: Optional[SyncCheckpoint] = None
+        extra_excludes: List[str] = []
+        synced_components: List[str] = []
 
         try:
+            # 0. 如果仅同步代码，先扫描项目结构
+            if code_only:
+                log.info("步骤 0: 扫描项目结构...")
+                Scanner = _get_scanner()
+                scanner = Scanner(self.config)
+                src_structure = scanner.scan(source)
+                extra_excludes = src_structure.get_rsync_excludes()
+                synced_components = [c.type for c in src_structure.components]
+                if components:
+                    # 过滤指定组件
+                    synced_components = [t for t in synced_components if t in components]
+                log.info("  扫描完成: %d 组件, 排除 %d 目录",
+                         len(src_structure.components), len(src_structure.all_non_code_dirs))
+
             # 1. 检查目标环境状态
             if strategy == "safe":
                 self._check_clean_target(ctx_dst)
@@ -120,14 +147,18 @@ class SafeSyncService:
 
             # 3. 执行同步
             log.info("步骤 2/4: 执行文件同步...")
-            synced, deleted = self._do_sync(ctx_src, ctx_dst, checksum=strategy == "safe")
+            synced, deleted = self._do_sync(
+                ctx_src, ctx_dst,
+                checksum=strategy == "safe",
+                extra_excludes=extra_excludes,
+            )
             log.info("  同步完成: %d 文件, 删除 %d 文件", synced, deleted)
 
             # 4. 校验一致性
             verified = False
             if verify:
                 log.info("步骤 3/4: 校验文件一致性...")
-                verified = self._verify_sync(ctx_src, ctx_dst)
+                verified = self._verify_sync(ctx_src, ctx_dst, extra_excludes=extra_excludes)
                 if verified:
                     log.info("  ✓ 校验通过")
                 else:
@@ -146,6 +177,8 @@ class SafeSyncService:
                 files_synced=synced,
                 files_deleted=deleted,
                 verified=verified,
+                code_only=code_only,
+                components_synced=synced_components,
             )
 
         except Exception as e:
@@ -293,7 +326,13 @@ class SafeSyncService:
 
         return checkpoint
 
-    def _do_sync(self, src: EnvContext, dst: EnvContext, checksum: bool) -> tuple[int, int]:
+    def _do_sync(
+        self,
+        src: EnvContext,
+        dst: EnvContext,
+        checksum: bool,
+        extra_excludes: Optional[List[str]] = None,
+    ) -> tuple[int, int]:
         """执行同步，返回 (同步文件数, 删除文件数)"""
         args = build_rsync_args(
             dry_run=False,
@@ -302,6 +341,9 @@ class SafeSyncService:
             progress=True,
             itemize=True,
         )
+        # 添加额外排除规则（代码扫描结果）
+        if extra_excludes:
+            args.extend(extra_excludes)
         args.extend([src.rsync_spec(), dst.rsync_spec()])
 
         proc = subprocess.run(args, capture_output=True, text=True)
@@ -318,7 +360,12 @@ class SafeSyncService:
 
         return synced, deleted
 
-    def _verify_sync(self, src: EnvContext, dst: EnvContext) -> bool:
+    def _verify_sync(
+        self,
+        src: EnvContext,
+        dst: EnvContext,
+        extra_excludes: Optional[List[str]] = None,
+    ) -> bool:
         """验证同步后的一致性"""
         # 使用 rsync dry-run + checksum 验证
         args = build_rsync_args(
@@ -327,6 +374,8 @@ class SafeSyncService:
             delete=True,
             itemize=True,
         )
+        if extra_excludes:
+            args.extend(extra_excludes)
         args.extend([src.rsync_spec(), dst.rsync_spec()])
 
         proc = subprocess.run(args, capture_output=True, text=True)
